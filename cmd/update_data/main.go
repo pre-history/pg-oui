@@ -1,19 +1,21 @@
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
-	"encoding/csv"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
+    "bufio"
+    "flag"
+    "encoding/binary"
+    "encoding/csv"
+    "errors"
+    "fmt"
+    "io"
+    "log"
+    "net/http"
+    "os"
+    "path/filepath"
+    "regexp"
+    "sort"
+    "strconv"
+    "strings"
 )
 
 const (
@@ -22,17 +24,17 @@ const (
 
 func download() error {
 
-	log.Printf("downloading %q", ouiURL)
+    log.Printf("downloading %q", ouiURL)
 
-	resp, err := http.Get(ouiURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+    resp, err := http.Get(ouiURL)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("download failed: %w", err)
-	}
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("download failed: status %d", resp.StatusCode)
+    }
 
 	fout, err := os.Create("tmp_oui.csv")
 	if err != nil {
@@ -56,8 +58,8 @@ type entry struct {
 	Vendor   string
 }
 type templateData struct {
-	Entries []entry
-	Vendors []string
+    Entries []entry
+    Vendors []string
 }
 
 func (o OUI) String() string {
@@ -89,7 +91,37 @@ func simplifyName(name string) string {
 	return string(b)
 }
 
-func newTemplateData(r io.Reader) *templateData {
+type filter struct {
+    vendorSet   map[string]struct{} // simplified names
+    vendorRegex *regexp.Regexp      // applied to simplified names
+    ouiSet      map[string]struct{} // lower 6-hex
+}
+
+func (f *filter) allowVendor(name string) bool {
+    if f == nil {
+        return true
+    }
+    s := simplifyName(strings.TrimSpace(strings.ReplaceAll(name, `"`, "")))
+    if len(f.vendorSet) > 0 {
+        if _, ok := f.vendorSet[s]; !ok {
+            return false
+        }
+    }
+    if f.vendorRegex != nil && !f.vendorRegex.MatchString(s) {
+        return false
+    }
+    return true
+}
+
+func (f *filter) allowOUI(o string) bool {
+    if f == nil || len(f.ouiSet) == 0 {
+        return true
+    }
+    _, ok := f.ouiSet[strings.ToLower(o)]
+    return ok
+}
+
+func newTemplateData(r io.Reader, flt *filter) *templateData {
 
 	var (
 		entries []entry
@@ -106,21 +138,29 @@ func newTemplateData(r io.Reader) *templateData {
 		panic(err)
 	}
 
-	for id := 0; ; {
-		record, err := c.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
+    for id := 0; ; {
+        record, err := c.Read()
+        if errors.Is(err, io.EOF) {
+            break
+        }
 
 		if err != nil {
 			panic(err)
 		}
 
-		o := strings.ToLower(record[1])
+        o := strings.ToLower(record[1])
 
-		v := strings.TrimSpace(record[2])
-		v = strings.ReplaceAll(v, `"`, "")
-		v = simplifyName(v)
+        if flt != nil && !flt.allowOUI(o) {
+            continue
+        }
+
+        v := strings.TrimSpace(record[2])
+        v = strings.ReplaceAll(v, `"`, "")
+        v = simplifyName(v)
+
+        if flt != nil && !flt.allowVendor(v) {
+            continue
+        }
 
 		if prev, ok := ouiMap[o]; ok { // 080030 is a known duplicate
 			log.Printf("Warning %q:%q is already registered to %q", o, v, prev)
@@ -142,23 +182,23 @@ func newTemplateData(r io.Reader) *templateData {
 		return entries[i].OUI.Int() < entries[j].OUI.Int()
 	})
 
-	return &templateData{
-		Entries: entries,
-		Vendors: vendors,
-	}
+    return &templateData{
+        Entries: entries,
+        Vendors: vendors,
+    }
 }
 
-func createIndex() error {
-	file, err := os.Open("vendors")
-	if err != nil {
-		return fmt.Errorf("failed to open data file: %w", err)
-	}
-	defer file.Close()
+func createIndex(dataFile string) error {
+    file, err := os.Open(dataFile)
+    if err != nil {
+        return fmt.Errorf("failed to open data file: %w", err)
+    }
+    defer file.Close()
 
-	indexFile, err := os.Create("vendors" + ".index")
-	if err != nil {
-		return fmt.Errorf("failed to create index file: %w", err)
-	}
+    indexFile, err := os.Create(dataFile + ".index")
+    if err != nil {
+        return fmt.Errorf("failed to create index file: %w", err)
+    }
 	defer indexFile.Close()
 
 	writer := bufio.NewWriter(indexFile)
@@ -229,20 +269,28 @@ func getLine(dataFile string, lineNumber int) (string, error) {
 	return line, nil
 }
 
-func updateData() {
-	file, err := os.Open("tmp_oui.csv")
-	if err != nil {
-		return
-	}
-	defer file.Close()
+func updateData(outdir string, flt *filter) {
+    file, err := os.Open("tmp_oui.csv")
+    if err != nil {
+        return
+    }
+    defer file.Close()
 
-	data := newTemplateData(file)
+    data := newTemplateData(file, flt)
 
-	fileEntries, err := os.Create("entries")
-	if err != nil {
-		return
-	}
-	defer fileEntries.Close()
+    if outdir == "" {
+        outdir = "."
+    }
+    if err := os.MkdirAll(outdir, 0o755); err != nil {
+        log.Printf("failed to create outdir %q: %v", outdir, err)
+        return
+    }
+
+    fileEntries, err := os.Create(filepath.Join(outdir, "entries"))
+    if err != nil {
+        return
+    }
+    defer fileEntries.Close()
 
 	w := bufio.NewWriter(fileEntries)
 	for _, entryRow := range data.Entries {
@@ -250,11 +298,11 @@ func updateData() {
 	}
 	_ = w.Flush()
 
-	fileVendors, err := os.Create("vendors")
-	if err != nil {
-		return
-	}
-	defer fileVendors.Close()
+    fileVendors, err := os.Create(filepath.Join(outdir, "vendors"))
+    if err != nil {
+        return
+    }
+    defer fileVendors.Close()
 
 	w = bufio.NewWriter(fileVendors)
 	for _, vendorRow := range data.Vendors {
@@ -262,14 +310,110 @@ func updateData() {
 	}
 	_ = w.Flush()
 
-	_ = createIndex()
+    _ = createIndex(fileVendors.Name())
 
-	os.Remove("tmp_oui.csv")
+    os.Remove("tmp_oui.csv")
 
 }
+func readLines(path string) ([]string, error) {
+    b, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+    raw := strings.Split(string(b), "\n")
+    out := make([]string, 0, len(raw))
+    for _, s := range raw {
+        s = strings.TrimSpace(s)
+        if s == "" {
+            continue
+        }
+        out = append(out, s)
+    }
+    return out, nil
+}
+
+func parseFilter(includeVendors, includeVendorsFile, includeOUIs, includeOUIsFile, vendorRegex string) (*filter, error) {
+    f := &filter{vendorSet: map[string]struct{}{}, ouiSet: map[string]struct{}{}}
+    // vendor set (comma)
+    if includeVendors != "" {
+        for _, v := range strings.Split(includeVendors, ",") {
+            v = simplifyName(strings.TrimSpace(v))
+            if v != "" {
+                f.vendorSet[v] = struct{}{}
+            }
+        }
+    }
+    // vendor set (file)
+    if includeVendorsFile != "" {
+        lines, err := readLines(includeVendorsFile)
+        if err != nil {
+            return nil, fmt.Errorf("read vendors file: %w", err)
+        }
+        for _, v := range lines {
+            v = simplifyName(strings.TrimSpace(v))
+            if v != "" {
+                f.vendorSet[v] = struct{}{}
+            }
+        }
+    }
+    // vendor regex
+    if vendorRegex != "" {
+        rx, err := regexp.Compile(vendorRegex)
+        if err != nil {
+            return nil, fmt.Errorf("compile vendor-regex: %w", err)
+        }
+        f.vendorRegex = rx
+    }
+    // OUI set (comma)
+    if includeOUIs != "" {
+        for _, o := range strings.Split(includeOUIs, ",") {
+            o = strings.ToLower(strings.TrimSpace(o))
+            o = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(o, ":", ""), "-", ""), ".", "")
+            if len(o) >= 6 {
+                f.ouiSet[o[:6]] = struct{}{}
+            }
+        }
+    }
+    // OUI set (file)
+    if includeOUIsFile != "" {
+        lines, err := readLines(includeOUIsFile)
+        if err != nil {
+            return nil, fmt.Errorf("read ouis file: %w", err)
+        }
+        for _, o := range lines {
+            o = strings.ToLower(strings.TrimSpace(o))
+            o = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(o, ":", ""), "-", ""), ".", "")
+            if len(o) >= 6 {
+                f.ouiSet[o[:6]] = struct{}{}
+            }
+        }
+    }
+    // If both vendor and OUI filters empty and no regex, return nil to avoid filter cost
+    if len(f.vendorSet) == 0 && len(f.ouiSet) == 0 && f.vendorRegex == nil {
+        return nil, nil
+    }
+    return f, nil
+}
+
 func main() {
-	_ = download()
+    outdir := flag.String("outdir", ".", "output directory for entries/vendors and index")
+    incV := flag.String("include-vendors", "", "comma-separated list of vendor names to include (simplified)")
+    incVFile := flag.String("include-vendors-file", "", "file with vendor names to include (one per line)")
+    incO := flag.String("include-ouis", "", "comma-separated list of OUIs to include (e.g. 0CB4A4, 00:11:22)")
+    incOFile := flag.String("include-ouis-file", "", "file with OUIs to include (one per line)")
+    vRegex := flag.String("vendor-regex", "", "regex applied to simplified vendor names to include")
+    skipDownload := flag.Bool("skip-download", false, "reuse existing tmp_oui.csv if present")
+    flag.Parse()
 
-	updateData()
+    flt, err := parseFilter(*incV, *incVFile, *incO, *incOFile, *vRegex)
+    if err != nil {
+        log.Fatalf("filter error: %v", err)
+    }
 
+    if !*skipDownload {
+        if err := download(); err != nil {
+            log.Fatalf("download: %v", err)
+        }
+    }
+    updateData(*outdir, flt)
 }
