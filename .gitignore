@@ -1,3 +1,14 @@
 .idea
+# Build/test caches
+.gocache/
+.gomodcache/
+
+# Generated data/binaries
+entries
+vendors
+vendors.index
+tmp_oui.csv
+update_data
+pg-oui
 
 

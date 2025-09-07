@@ -66,21 +66,23 @@ func itoa(n int) string {
     if n == 0 {
         return "0"
     }
-    neg := false
-    if n < 0 {
-        neg = true
+    neg := n < 0
+    if neg {
         n = -n
     }
-    b := make([]byte, 0, 12)
+    // Build digits in reverse into a fixed buffer
+    var buf [20]byte
+    i := len(buf)
     for n > 0 {
-        d := byte(n % 10)
-        b = append([]byte{'0' + d}, b...)
+        i--
+        buf[i] = byte('0' + n%10)
         n /= 10
     }
     if neg {
-        b = append([]byte{'-'}, b...)
+        i--
+        buf[i] = '-'
     }
-    return string(b)
+    return string(buf[i:])
 }
 
 func TestSearchVendor_NormalizationAndTrim(t *testing.T) {

@@ -150,7 +150,7 @@ func newTemplateData(r io.Reader, flt *filter) *templateData {
 
         o := strings.ToLower(record[1])
 
-        if !flt.allowOUI(o) {
+        if flt != nil && !flt.allowOUI(o) {
             continue
         }
 
@@ -158,7 +158,7 @@ func newTemplateData(r io.Reader, flt *filter) *templateData {
         v = strings.ReplaceAll(v, `"`, "")
         v = simplifyName(v)
 
-        if !flt.allowVendor(v) {
+        if flt != nil && !flt.allowVendor(v) {
             continue
         }
 

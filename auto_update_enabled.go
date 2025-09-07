@@ -169,8 +169,7 @@ func buildFromCSV(r io.Reader, outdir string, filt *Filter) error {
             continue
         }
         v = simplifyName(v)
-        if prev, ok := ouiMap[o]; ok {
-            _ = prev
+        if _, ok := ouiMap[o]; ok {
             continue
         }
         ouiMap[o] = v
@@ -249,4 +248,3 @@ func createIndex(dataFile string) error {
     }
     return nil
 }
-
