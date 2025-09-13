@@ -130,23 +130,23 @@ func TestOUIIndexing(t *testing.T) {
 	dir := t.TempDir()
 
 	// Regression test for off-by-one indexing bug.
-	// The entries file stores vendor IDs that should map to line numbers in the vendors file.
-	// Previously, there was an off-by-one error where ID N would return line N+1.
+	// The entries file stores vendor IDs that should map directly to array indices in the vendors file.
+	// Previously, there was an off-by-one error where ID N would incorrectly access vendors[N-1].
 
 	vendors := []string{
-		"First Vendor",  // line 1, should be ID 1
-		"Second Vendor", // line 2, should be ID 2
-		"Third Vendor",  // line 3, should be ID 3
-		"Fourth Vendor", // line 4, should be ID 4
-		"Fifth Vendor",  // line 5, should be ID 5
+		"First Vendor",  // index 0, vendor ID 0
+		"Second Vendor", // index 1, vendor ID 1
+		"Third Vendor",  // index 2, vendor ID 2
+		"Fourth Vendor", // index 3, vendor ID 3
+		"Fifth Vendor",  // index 4, vendor ID 4
 	}
 	writeVendors(t, dir, vendors)
 
 	entries := map[string]int{
-		"000001": 1, // Should map to "Second Vendor" (offsets[1] to offsets[2])
-		"000002": 2, // Should map to "Third Vendor" (offsets[2] to offsets[3])
-		"000003": 3, // Should map to "Fourth Vendor" (offsets[3] to offsets[4])
-		"000004": 4, // Should map to "Fifth Vendor" (offsets[4] to offsets[5])
+		"000001": 1, // Should map to vendors[1]: "Second Vendor"
+		"000002": 2, // Should map to vendors[2]: "Third Vendor"
+		"000003": 3, // Should map to vendors[3]: "Fourth Vendor"
+		"000004": 4, // Should map to vendors[4]: "Fifth Vendor"
 	}
 	writeEntries(t, dir, entries)
 
@@ -191,11 +191,11 @@ func TestOUIIndexingRealData(t *testing.T) {
 		oui      string
 		expected string
 	}{
-		{"08d1f9", "Espressif"},               // ID 14 -> line 14
-		{"f42679", "Intel Corporate"},         // ID 25 -> line 25
-		{"b827eb", "Raspberry Pi Foundation"}, // ID 17003 -> line 17003
-		{"3c8d20", "Google"},                  // ID 203 -> line 203
-		{"704d7b", "ASUSTek COMPUTER"},        // ID 388 -> line 388
+		{"08d1f9", "Espressif"},               // ID 14 -> vendors[14]
+		{"f42679", "Intel Corporate"},         // ID 25 -> vendors[25]
+		{"b827eb", "Raspberry Pi Foundation"}, // ID 17003 -> vendors[17003]
+		{"3c8d20", "Google"},                  // ID 203 -> vendors[203]
+		{"704d7b", "ASUSTek COMPUTER"},        // ID 388 -> vendors[388]
 	}
 
 	for _, tc := range testCases {
